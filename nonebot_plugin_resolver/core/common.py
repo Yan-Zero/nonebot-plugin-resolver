@@ -3,9 +3,12 @@ import os
 import pickle
 import re
 import time
+import tempfile
+import subprocess
 from typing import List, Dict, Any
 from urllib.parse import urlparse
 from pathlib import Path
+
 
 import aiofiles
 import aiohttp
@@ -38,12 +41,12 @@ async def download_video(url, proxy: str = None, ext_headers=None) -> str:
 
     # 配置代理
     client_config = {
-        'headers': headers,
-        'timeout': httpx.Timeout(60, connect=5.0),
-        'follow_redirects': True
+        "headers": headers,
+        "timeout": httpx.Timeout(60, connect=5.0),
+        "follow_redirects": True,
     }
     if proxy:
-        client_config['proxies'] = { 'https': proxy }
+        client_config["proxies"] = {"https": proxy}
 
     # 下载文件
     try:
@@ -58,7 +61,9 @@ async def download_video(url, proxy: str = None, ext_headers=None) -> str:
         return None
 
 
-async def download_img(url: str, path: str = '', proxy: str = None, session=None, headers=None) -> str:
+async def download_img(
+    url: str, path: str = "", proxy: str = None, session=None, headers=None
+) -> str:
     """
     异步下载（aiohttp）网络图片，并支持通过代理下载。
     如果未指定path，则图片将保存在当前工作目录并以图片的文件名命名。
@@ -69,42 +74,64 @@ async def download_img(url: str, path: str = '', proxy: str = None, session=None
     :param proxy: 可选，下载图片时使用的代理服务器的URL。
     :return: 保存图片的路径。
     """
-    if path == '':
-        path = os.path.join(os.getcwd(), url.split('/').pop())
+    if path == "":
+        path = os.path.join(os.getcwd(), url.split("/").pop())
     # 单个文件下载
     if session is None:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, proxy=proxy, headers=headers) as response:
                 if response.status == 200:
                     data = await response.read()
-                    with open(path, 'wb') as f:
+                    with open(path, "wb") as f:
                         f.write(data)
     # 多个文件异步下载
     else:
         async with session.get(url, proxy=proxy, headers=headers) as response:
             if response.status == 200:
                 data = await response.read()
-                with open(path, 'wb') as f:
+                with open(path, "wb") as f:
                     f.write(data)
     return path
 
 
-async def download_audio(url):
-    # 从URL中提取文件名
-    parsed_url = urlparse(url)
-    file_name = parsed_url.path.split('/')[-1]
-    # 去除可能存在的请求参数
-    file_name = file_name.split('?')[0]
-
-    path = os.path.join(os.getcwd(), file_name)
-
+async def download_file(url) -> bytes:
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
-        response.raise_for_status()  # 检查请求是否成功
+        response.raise_for_status()
+        return response.content
 
-        async with aiofiles.open(path, 'wb') as file:
-            await file.write(response.content)
-    return path
+
+async def convert_to_wav(file_bytes) -> bytes:
+    with tempfile.NamedTemporaryFile(delete=False) as input_temp_file:
+        input_temp_file.write(file_bytes)
+        input_temp_file_path = input_temp_file.name
+
+    output_temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    output_temp_file_path = output_temp_file.name
+    output_temp_file.close()
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_temp_file_path,
+            output_temp_file_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        _, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            raise Exception(f"ffmpeg failed: {stderr.decode()}")
+
+        with open(output_temp_file_path, "rb") as mp3_file:
+            mp3_data = mp3_file.read()
+    finally:
+        os.remove(input_temp_file_path)
+        os.remove(output_temp_file_path)
+    return mp3_data
 
 
 def delete_boring_characters(sentence):
@@ -113,7 +140,11 @@ def delete_boring_characters(sentence):
     :param sentence:
     :return:
     """
-    return re.sub('[0-9’!"∀〃#$%&\'()*+,-./:;<=>?@，。?★、…【】《》？“”‘’！[\\]^_`{|}~～\s]+', "", sentence)
+    return re.sub(
+        "[0-9’!\"∀〃#$%&'()*+,-./:;<=>?@，。?★、…【】《》？“”‘’！[\\]^_`{|}~～\s]+",
+        "",
+        sentence,
+    )
 
 
 def remove_files(file_paths: List[str]) -> Dict[str, str]:
@@ -126,17 +157,17 @@ def remove_files(file_paths: List[str]) -> Dict[str, str]:
     Returns:
     dict: 一个以文件路径为键、删除状态为值的字典
     """
-    results = { }
+    results = {}
 
     for file_path in file_paths:
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                results[file_path] = 'remove'
+                results[file_path] = "remove"
             except Exception as e:
-                results[file_path] = f'error: {e}'
+                results[file_path] = f"error: {e}"
         else:
-            results[file_path] = 'don\'t exist'
+            results[file_path] = "don't exist"
 
     return results
 
@@ -195,15 +226,15 @@ def load_or_initialize_list(file_path: str) -> List[Any]:
 def read_pickle_sync(filename):
     file_path = Path(filename).resolve()
     if not file_path.exists():
-        return { }
+        return {}
 
-    with open(file_path, 'rb') as f:
+    with open(file_path, "rb") as f:
         return pickle.load(f)
 
 
 # 同步的pickle写入函数
 def save_pickle_sync(data, filename):
-    with open(Path(filename).resolve(), 'wb') as f:
+    with open(Path(filename).resolve(), "wb") as f:
         pickle.dump(data, f)
 
 
