@@ -24,9 +24,9 @@ from nonebot.adapters.onebot.v11.event import GroupMessageEvent, PrivateMessageE
 from nonebot.plugin import PluginMetadata
 
 from .config import Config
-from .constants import (
+from .core.constants import (
     COMMON_HEADER,
-    URL_TYPE_CODE_DICT,
+    DY_URL_TYPE_CODE_DICT,
     DOUYIN_VIDEO,
     GENERAL_REQ_LINK,
     XHS_REQ_LINK,
@@ -38,15 +38,7 @@ from .constants import (
     WEIBO_SINGLE_INFO,
     KUGOU_TEMP_API,
 )
-from .core.acfun import (
-    parse_url,
-    download_m3u8_videos,
-    parse_m3u8,
-    merge_ac_file_to_mp4,
-)
-from .core.bili23 import download_b_file, merge_file_to_mp4, extra_bili_info
-from .core.common import (
-    delete_boring_characters,
+from .core import (
     download_img,
     download_file,
     remove_files,
@@ -54,6 +46,13 @@ from .core.common import (
     convert_to_wav,
     get_file_size_mb,
 )
+from .core.acfun import (
+    parse_url,
+    download_m3u8_videos,
+    parse_m3u8,
+    merge_ac_file_to_mp4,
+)
+from .core.bili23 import download_b_file, merge_file_to_mp4, extra_bili_info
 from .core.tiktok import generate_x_bogus_url
 from .core.ytdlp import get_video_title, download_ytb_video
 from .core.weibo import mid2id
@@ -63,7 +62,7 @@ __plugin_meta__ = PluginMetadata(
     description="NoneBot2链接分享解析器插件。解析视频、图片链接/小程序插件，tiktok、bilibili、twitter等实时发送！",
     usage="分享链接即可体验到效果",
     type="application",
-    homepage="https://github.com/zhiyu1998/nonebot-plugin-resolver",
+    homepage="https://github.com/Yan-Zero/nonebot-plugin-resolver",
     config=Config,
     supported_adapters={"~onebot.v11", "~qq"},
 )
@@ -250,8 +249,6 @@ async def bilibili(bot: Bot, event: Event) -> None:
         else:
             # 如果索引超出范围，使用 video_info['duration'] 或者其他默认值
             video_duration = video_info.get("duration", 0)
-    # 删除特殊字符
-    video_title = delete_boring_characters(video_title)
     # 截断下载时间比较长的视频
     online = await v.get_online()
     online_str = (
@@ -342,7 +339,7 @@ async def dy(bot: Bot, event: Event) -> None:
         "referer": f"https://www.douyin.com/video/{dou_id}",
         "cookie": douyin_ck,
     } | COMMON_HEADER
-    api_url = DOUYIN_VIDEO.replace("{}", dou_id)
+    api_url = DOUYIN_VIDEO.format(dou_id)
     api_url = generate_x_bogus_url(api_url, headers)  # 如果请求失败直接返回
     async with aiohttp.ClientSession() as session:
         async with session.get(api_url, headers=headers, timeout=10) as response:
@@ -354,7 +351,7 @@ async def dy(bot: Bot, event: Event) -> None:
             detail = detail["aweme_detail"]
             # 判断是图片还是视频
             url_type_code = detail["aweme_type"]
-            url_type = URL_TYPE_CODE_DICT.get(url_type_code, "video")
+            url_type = DY_URL_TYPE_CODE_DICT.get(url_type_code, "video")
             await douyin.send(
                 Message(f"{GLOBAL_NICKNAME}识别：抖音，{detail.get('desc')}")
             )
@@ -362,7 +359,7 @@ async def dy(bot: Bot, event: Event) -> None:
             if url_type == "video":
                 # 识别播放地址
                 player_uri = detail.get("video").get("play_addr")["uri"]
-                player_real_addr = DY_TOUTIAO_INFO.replace("{}", player_uri)
+                player_real_addr = DY_TOUTIAO_INFO.format(player_uri)
                 # 发送视频
                 # await douyin.send(Message(MessageSegment.video(player_addr)))
                 await auto_video_send(bot, event, player_real_addr)
@@ -415,7 +412,6 @@ async def tiktok(bot: Bot, event: Event) -> None:
             proxies=proxy,
         )
         url = str(temp_resp.url)
-        # logger.info(url)
     else:
         url = re.search(url_reg, url)[0]
     title = get_video_title(url, IS_OVERSEA, RESOLVER_PROXY)
@@ -425,7 +421,6 @@ async def tiktok(bot: Bot, event: Event) -> None:
     target_tik_video_path = await download_ytb_video(
         url, IS_OVERSEA, os.getcwd(), RESOLVER_PROXY, "tiktok"
     )
-
     await auto_video_send(bot, event, target_tik_video_path)
 
 
@@ -448,12 +443,10 @@ async def ac(bot: Bot, event: Event) -> None:
     m3u8_full_urls, ts_names, output_folder_name, output_file_name = parse_m3u8(
         url_m3u8s
     )
-    # logger.info(output_folder_name, output_file_name)
     await asyncio.gather(
         *[download_m3u8_videos(url, i) for i, url in enumerate(m3u8_full_urls)]
     )
     merge_ac_file_to_mp4(ts_names, output_file_name)
-    # await acfun.send(Message(MessageSegment.video(f"{os.getcwd()}/{output_file_name}")))
     await auto_video_send(bot, event, f"{os.getcwd()}/{output_file_name}")
 
 
@@ -470,7 +463,7 @@ async def twitter(bot: Bot, event: Event):
         0
     ]
 
-    x_url = GENERAL_REQ_LINK.replace("{}", x_url)
+    x_url = GENERAL_REQ_LINK.format(x_url)
 
     def x_req(url):
         return httpx.get(
@@ -544,7 +537,7 @@ async def xiaohongshu(bot: Bot, event: Event):
             )
         )
         return
-    # 请求头
+
     headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,"
         "application/signed-exchange;v=b3;q=0.9",
@@ -560,7 +553,6 @@ async def xiaohongshu(bot: Bot, event: Event):
         xhs_id = re.search(r"source=note&noteId=(\w+)", msg_url)
     xhs_id = xhs_id[1]
 
-    # 解析 URL 参数
     parsed_url = urlparse(msg_url)
     params = parse_qs(parsed_url.query)
     # 提取 xsec_source 和 xsec_token
@@ -571,7 +563,7 @@ async def xiaohongshu(bot: Bot, event: Event):
         f"{XHS_REQ_LINK}{xhs_id}?xsec_source={xsec_source}&xsec_token={xsec_token}",
         headers=headers,
     ).text
-    # response_json = re.findall('window.__INITIAL_STATE__=(.*?)</script>', html)[0]
+
     try:
         response_json = re.findall("window.__INITIAL_STATE__=(.*?)</script>", html)[0]
     except IndexError:
@@ -606,24 +598,14 @@ async def xiaohongshu(bot: Bot, event: Event):
                 )
             links_path = await asyncio.gather(*aio_task)
     elif type == "video":
-        # 这是一条解析有水印的视频
-        logger.info(note_data["video"])
-
         video_url = note_data["video"]["media"]["stream"]["h264"][0]["masterUrl"]
-
-        # ⚠️ 废弃，解析无水印视频video.consumer.originVideoKey
-        # video_url = f"http://sns-video-bd.xhscdn.com/{note_data['video']['consumer']['originVideoKey']}"
-        path = await download_video(video_url)
-        # await xhs.send(Message(MessageSegment.video(path)))
-        await auto_video_send(bot, event, path)
-        return
+        return await auto_video_send(bot, event, await download_video(video_url))
     # 发送图片
     links = make_node_segment(
         bot.self_id, [MessageSegment.image(f"file://{link}") for link in links_path]
     )
     # 发送异步后的数据
     await send_forward_both(bot, event, links)
-    # 清除图片
     for temp in links_path:
         os.unlink(temp)
 
@@ -635,18 +617,15 @@ async def youtube(bot: Bot, event: Event):
         str(event.get_message()).strip(),
     )[0]
 
-    # 海外服务器判断
     proxy = None if IS_OVERSEA else RESOLVER_PROXY
-
     title = get_video_title(msg_url, IS_OVERSEA, proxy)
-
     await y2b.send(Message(f"{GLOBAL_NICKNAME}识别：油管，{title}\n"))
 
-    target_ytb_video_path = await download_ytb_video(
-        msg_url, IS_OVERSEA, os.getcwd(), proxy
-    )
-
-    await auto_video_send(bot, event, target_ytb_video_path)
+    if GLOBAL_CONFIG.download_video:
+        target_ytb_video_path = await download_ytb_video(
+            msg_url, IS_OVERSEA, os.getcwd(), proxy
+        )
+        await auto_video_send(bot, event, target_ytb_video_path)
 
 
 @ncm.handle()
@@ -720,7 +699,6 @@ async def kugou(bot: Bot, event: Event):
         match = re.search(reg1, message)
         url = match.group()
 
-        # 使用 httpx 获取 URL 的标题
     response = httpx.get(url, follow_redirects=True)
     if response.status_code == 200:
         title = response.text
@@ -731,7 +709,7 @@ async def kugou(bot: Bot, event: Event):
             kugou_vip_data = httpx.get(
                 f"{KUGOU_TEMP_API.replace('{}', kugou_title)}", headers=COMMON_HEADER
             ).json()
-            # logger.info(kugou_vip_data)
+
             kugou_url = kugou_vip_data.get("music_url")
             kugou_cover = kugou_vip_data.get("cover")
             kugou_name = kugou_vip_data.get("title")
@@ -746,7 +724,6 @@ async def kugou(bot: Bot, event: Event):
                     ]
                 )
             )
-            # 发送语音
             await kg.send(
                 Message(
                     MessageSegment.record(
@@ -770,7 +747,6 @@ async def wb(bot: Bot, event: Event):
     weibo_id = None
     reg = r'(jumpUrl|qqdocurl)": ?"(.*?)"'
 
-    # 处理卡片问题
     if "com.tencent.structmsg" or "com.tencent.miniapp" in message:
         match = re.search(reg, message)
         print(match)
@@ -781,23 +757,18 @@ async def wb(bot: Bot, event: Event):
                 message = json.loads('"' + get_url + '"')
     else:
         message = message
-    # logger.info(message)
-    # 判断是否包含 "m.weibo.cn"
+
     if "m.weibo.cn" in message:
         # https://m.weibo.cn/detail/4976424138313924
         match = re.search(r"(?<=detail/)[A-Za-z\d]+", message) or re.search(
             r"(?<=m.weibo.cn/)[A-Za-z\d]+/[A-Za-z\d]+", message
         )
         weibo_id = match.group(0) if match else None
-
-    # 判断是否包含 "weibo.com/tv/show" 且包含 "mid="
     elif "weibo.com/tv/show" in message and "mid=" in message:
         # https://weibo.com/tv/show/1034:5007449447661594?mid=5007452630158934
         match = re.search(r"(?<=mid=)[A-Za-z\d]+", message)
         if match:
             weibo_id = mid2id(match.group(0))
-
-    # 判断是否包含 "weibo.com"
     elif "weibo.com" in message:
         # https://weibo.com/1707895270/5006106478773472
         match = re.search(r"(?<=weibo.com/)[A-Za-z\d]+/[A-Za-z\d]+", message)
@@ -811,7 +782,7 @@ async def wb(bot: Bot, event: Event):
     logger.info(weibo_id)
     # 请求数据
     resp = httpx.get(
-        WEIBO_SINGLE_INFO.replace("{}", weibo_id),
+        WEIBO_SINGLE_INFO.format(weibo_id),
         headers={
             "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
             "cookie": "_T_WM=40835919903; WEIBOCN_FROM=1110006030; MLOGIN=0; XSRF-TOKEN=4399c8",
@@ -832,7 +803,6 @@ async def wb(bot: Bot, event: Event):
             "page_info",
         ]
     )
-    # 发送消息
     await weibo.send(
         Message(
             f"{GLOBAL_NICKNAME}识别：微博，{re.sub(r'<[^>]+>', '', text)}\n{status_title}\n{source}\t{region_name if region_name else ''}"
@@ -857,7 +827,6 @@ async def wb(bot: Bot, event: Event):
         )
         # 发送异步后的数据
         await send_forward_both(bot, event, links)
-        # 清除图片
         for temp in links_path:
             os.unlink(temp)
     if page_info:
@@ -878,8 +847,7 @@ async def wb(bot: Bot, event: Event):
 def make_node_segment(
     user_id, segments: MessageSegment | list
 ) -> MessageSegment | Iterable[MessageSegment]:
-    """
-        将消息封装成 Segment 的 Node 类型，可以传入单个也可以传入多个，返回一个封装好的转发类型
+    """将消息封装成 Segment 的 Node 类型，可以传入单个也可以传入多个，返回一个封装好的转发类型
     :param user_id: 可以通过event获取
     :param segments: 一般为 MessageSegment.image / MessageSegment.video / MessageSegment.text
     :return:
@@ -899,8 +867,7 @@ def make_node_segment(
 async def send_forward_both(
     bot: Bot, event: Event, segments: MessageSegment | list
 ) -> None:
-    """
-        自动判断message是 List 还是单个，然后发送{转发}，允许发送群和个人
+    """自动判断message是 List 还是单个，然后发送{转发}，允许发送群和个人
     :param bot:
     :param event:
     :param segments:
@@ -912,23 +879,6 @@ async def send_forward_both(
         await bot.send_private_forward_msg(user_id=event.user_id, messages=segments)
 
 
-async def upload_both(bot: Bot, event: Event, file_path: str, name: str) -> None:
-    """
-        上传文件，不限于群和个人
-    :param bot:
-    :param event:
-    :param file_path:
-    :param name:
-    :return:
-    """
-    if isinstance(event, GroupMessageEvent):
-        # 上传群文件
-        await bot.upload_group_file(group_id=event.group_id, file=file_path, name=name)
-    elif isinstance(event, PrivateMessageEvent):
-        # 上传私聊文件
-        await bot.upload_private_file(user_id=event.user_id, file=file_path, name=name)
-
-
 async def auto_video_send(bot: Bot, event: Event, data_path: str):
     """
     拉格朗日自动转换成CQ码发送
@@ -936,6 +886,18 @@ async def auto_video_send(bot: Bot, event: Event, data_path: str):
     :param data_path:
     :return:
     """
+
+    async def upload_both(file_path: str, name: str) -> None:
+        """上传文件，不限于群和个人"""
+        if isinstance(event, GroupMessageEvent):
+            await bot.upload_group_file(
+                group_id=event.group_id, file=file_path, name=name
+            )
+        elif isinstance(event, PrivateMessageEvent):
+            await bot.upload_private_file(
+                user_id=event.user_id, file=file_path, name=name
+            )
+
     try:
         if data_path is not None and data_path.startswith("http"):
             data_path = await download_video(data_path)
@@ -947,7 +909,7 @@ async def auto_video_send(bot: Bot, event: Event, data_path: str):
                     f"当前解析文件 {file_size_in_mb} MB 大于 {VIDEO_MAX_MB} MB，尝试改用文件方式发送，请稍等..."
                 ),
             )
-            return await upload_both(bot, event, data_path, data_path.split("/")[-1])
+            return await upload_both(data_path, data_path.split("/")[-1])
         await bot.send(event, MessageSegment.video(f"file://{data_path}"))
     except Exception as e:
         logger.error(f"解析发送出现错误，具体为\n{e}")

@@ -45,7 +45,7 @@ body:
   - type: textarea
     attributes:
       label: 插件版本号
-      description: 当前你使用的 zhiyu1998/nonebot-plugin-resolver 版本号
+      description: 当前你使用的 Yan-Zero/nonebot-plugin-resolver 版本号
     validations:
       required: true
   - type: dropdown

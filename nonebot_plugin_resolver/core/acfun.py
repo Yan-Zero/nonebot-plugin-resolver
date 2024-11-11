@@ -6,8 +6,8 @@ import os
 import httpx
 
 headers = {
-    'referer': 'https://www.acfun.cn/',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83'
+    "referer": "https://www.acfun.cn/",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83",
 }
 
 
@@ -29,11 +29,11 @@ def parse_url(url: str):
     video_info = json.loads(str_json_escaped)
     # print(video_info)
     video_name = parse_video_name_fixed(video_info)
-    ks_play_json = video_info['currentVideoInfo']['ksPlayJson']
+    ks_play_json = video_info["currentVideoInfo"]["ksPlayJson"]
     ks_play = json.loads(ks_play_json)
-    representations = ks_play['adaptationSet'][0]['representation']
+    representations = ks_play["adaptationSet"][0]["representation"]
     # 这里[d['url'] for d in representations]，从4k~360，此处默认720p
-    url_m3u8s = [d['url'] for d in representations][3]
+    url_m3u8s = [d["url"] for d in representations][3]
     # print([d['url'] for d in representations])
     return url_m3u8s, video_name
 
@@ -91,31 +91,37 @@ def parse_video_name(video_info: json):
     :param video_info:
     :return:
     """
-    ac_id = "ac" + video_info['dougaId'] if video_info['dougaId'] is not None else ""
-    title = video_info['title'] if video_info['title'] is not None else ""
-    author = video_info['user']['name'] if video_info['user']['name'] is not None else ""
-    upload_time = video_info['createTime'] if video_info['createTime'] is not None else ""
-    desc = video_info['description'] if video_info['description'] is not None else ""
+    ac_id = "ac" + video_info["dougaId"] if video_info["dougaId"] is not None else ""
+    title = video_info["title"] if video_info["title"] is not None else ""
+    author = (
+        video_info["user"]["name"] if video_info["user"]["name"] is not None else ""
+    )
+    upload_time = (
+        video_info["createTime"] if video_info["createTime"] is not None else ""
+    )
+    desc = video_info["description"] if video_info["description"] is not None else ""
 
-    raw = '_'.join([ac_id, title, author, upload_time, desc])[:101]
+    raw = "_".join([ac_id, title, author, upload_time, desc])[:101]
     return raw
 
 
 def merge_ac_file_to_mp4(ts_names, full_file_name, should_delete=True):
-    concat_str = '\n'.join([f"file {i}.ts" for i, d in enumerate(ts_names)])
+    concat_str = "\n".join([f"file {i}.ts" for i, d in enumerate(ts_names)])
     # print(concat_str)
-    with open('file.txt', 'w') as f:
+    with open("file.txt", "w") as f:
         f.write(concat_str)
 
-    subprocess.call(f'ffmpeg -y -f concat -safe 0 -i "file.txt" -c copy "{full_file_name}"', shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    )
+    subprocess.call(
+        f'ffmpeg -y -f concat -safe 0 -i "file.txt" -c copy "{full_file_name}"',
+        shell=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     if should_delete:
-        os.unlink('file.txt')
+        os.unlink("file.txt")
         # os.unlink(full_file_name)
         for i in range(len(ts_names)):
-            os.unlink(f'{i}.ts')
+            os.unlink(f"{i}.ts")
 
 
 def parse_video_name_fixed(video_info: json):
