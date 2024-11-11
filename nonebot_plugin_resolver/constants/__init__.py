@@ -1,13 +1,13 @@
-from .ncm import NETEASE_API_CN
-from .ncm import NETEASE_TEMP_API
-from .xhs import XHS_REQ_LINK
-from .bili import BILIBILI_HEADER
-from .kugou import KUGOU_TEMP_API
-from .weibo import WEIBO_SINGLE_INFO
-from .tiktok import TIKTOK_VIDEO
-from .tiktok import DOUYIN_VIDEO
-from .tiktok import DY_TOUTIAO_INFO
-from .tiktok import URL_TYPE_CODE_DICT
+from .ncm import NETEASE_API_CN  # noqa: F401
+from .ncm import NETEASE_TEMP_API  # noqa: F401
+from .xhs import XHS_REQ_LINK  # noqa: F401
+from .bili import BILIBILI_HEADER  # noqa: F401
+from .kugou import KUGOU_TEMP_API  # noqa: F401
+from .weibo import WEIBO_SINGLE_INFO  # noqa: F401
+from .tiktok import TIKTOK_VIDEO  # noqa: F401
+from .tiktok import DOUYIN_VIDEO  # noqa: F401
+from .tiktok import DY_TOUTIAO_INFO  # noqa: F401
+from .tiktok import URL_TYPE_CODE_DICT  # noqa: F401
 
 """
 通用解析

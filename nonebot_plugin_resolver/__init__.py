@@ -4,13 +4,11 @@ import os.path
 import pathlib
 import asyncio
 import httpx
+import aiohttp
 
-from io import BytesIO
 from typing import cast, Iterable, Union
 from urllib.parse import urlparse, parse_qs
 
-
-from pydub import AudioSegment
 from bilibili_api import video, Credential, live, article
 from bilibili_api.favorite_list import get_video_favorite_list_content
 from bilibili_api.opus import Opus
@@ -57,8 +55,8 @@ from .core.common import (
     remove_files,
     download_video,
     convert_to_wav,
+    get_file_size_mb,
 )
-from .core.common import *
 from .core.tiktok import generate_x_bogus_url
 from .core.ytdlp import get_video_title, download_ytb_video
 from .core.weibo import mid2id
@@ -81,8 +79,6 @@ GLOBAL_NICKNAME: str = str(getattr(GLOBAL_CONFIG, "r_global_nickname", ""))
 RESOLVER_PROXY: str = getattr(GLOBAL_CONFIG, "resolver_proxy", "http://127.0.0.1:7890")
 # 是否是海外服务器
 IS_OVERSEA: bool = bool(getattr(GLOBAL_CONFIG, "is_oversea", False))
-# 是否是拉格朗日引擎
-IS_LAGRANGE: bool = bool(getattr(GLOBAL_CONFIG, "is_lagrange", False))
 # 哔哩哔哩限制的最大视频时长（默认8分钟），单位：秒
 VIDEO_DURATION_MAXIMUM: int = int(getattr(GLOBAL_CONFIG, "video_duration_maximum", 480))
 # 哔哩哔哩的 SESSDATA
@@ -303,7 +299,7 @@ async def bilibili(bot: Bot, event: Event) -> None:
         logger.info(remove_res)
     # 发送出去
     # await bili23.send(Message(MessageSegment.video(f"{path}-res.mp4")))
-    await auto_video_send(event, f"{path}-res.mp4", IS_LAGRANGE)
+    await auto_video_send(event, f"{path}-res.mp4")
     # 这里是总结内容，如果写了cookie就可以
     if BILI_SESSDATA != "":
         ai_conclusion = await v.get_ai_conclusion(await v.get_cid(0))
@@ -324,7 +320,7 @@ async def dy(bot: Bot, event: Event) -> None:
     :return:
     """
     # 消息
-    msg: str = str(event.message).strip()
+    msg: str = str(event.get_message()).strip()
     logger.info(msg)
     # 正则匹配
     reg = r"(http:|https:)\/\/v.douyin.com\/[A-Za-z\d._?%&+\-=#]*"
@@ -371,14 +367,12 @@ async def dy(bot: Bot, event: Event) -> None:
                 player_uri = detail.get("video").get("play_addr")["uri"]
                 player_real_addr = DY_TOUTIAO_INFO.replace("{}", player_uri)
                 # 发送视频
-                # logger.info(player_addr)
                 # await douyin.send(Message(MessageSegment.video(player_addr)))
-                await auto_video_send(event, player_real_addr, IS_LAGRANGE)
+                await auto_video_send(event, player_real_addr)
             elif url_type == "image":
                 # 无水印图片列表/No watermark image list
                 no_watermark_image_list = []
                 # 有水印图片列表/With watermark image list
-                watermark_image_list = []
                 # 遍历图片列表/Traverse image list
                 for i in detail["images"]:
                     # 无水印图片列表
@@ -404,7 +398,7 @@ async def tiktok(event: Event) -> None:
     :return:
     """
     # 消息
-    url: str = str(event.message).strip()
+    url: str = str(event.get_message()).strip()
 
     # 海外服务器判断
     proxy = None if IS_OVERSEA else RESOLVER_PROXY
@@ -437,7 +431,7 @@ async def tiktok(event: Event) -> None:
         url, IS_OVERSEA, os.getcwd(), RESOLVER_PROXY, "tiktok"
     )
 
-    await auto_video_send(event, target_tik_video_path, IS_LAGRANGE)
+    await auto_video_send(event, target_tik_video_path)
 
 
 @acfun.handle()
@@ -448,7 +442,7 @@ async def ac(event: Event) -> None:
     :return:
     """
     # 消息
-    inputMsg: str = str(event.message).strip()
+    inputMsg: str = str(event.get_message()).strip()
 
     # 短号处理
     if "m.acfun.cn" in inputMsg:
@@ -465,7 +459,7 @@ async def ac(event: Event) -> None:
     )
     merge_ac_file_to_mp4(ts_names, output_file_name)
     # await acfun.send(Message(MessageSegment.video(f"{os.getcwd()}/{output_file_name}")))
-    await auto_video_send(event, f"{os.getcwd()}/{output_file_name}", IS_LAGRANGE)
+    await auto_video_send(event, f"{os.getcwd()}/{output_file_name}")
 
 
 @twit.handle()
@@ -476,7 +470,7 @@ async def twitter(bot: Bot, event: Event):
     :param event:
     :return:
     """
-    msg: str = str(event.message).strip()
+    msg: str = str(event.get_message()).strip()
     x_url = re.search(r"https?:\/\/x.com\/[0-9-a-zA-Z_]{1,20}\/status\/([0-9]*)", msg)[
         0
     ]
@@ -518,10 +512,9 @@ async def twitter(bot: Bot, event: Event):
     else:
         # 视频
         res = await download_video(x_url_res)
-    aio_task_res = auto_determine_send_type(int(bot.self_id), res)
 
     # 发送异步后的数据
-    await send_forward_both(bot, event, aio_task_res)
+    await send_forward_both(bot, event, auto_determine_send_type(int(bot.self_id), res))
 
     # 清除垃圾
     os.unlink(res)
@@ -536,7 +529,7 @@ async def xiaohongshu(bot: Bot, event: Event):
     """
     msg_url = re.search(
         r"(http:|https:)\/\/(xhslink|(www\.)xiaohongshu).com\/[A-Za-z\d._?%&+\-=\/#@]*",
-        str(event.message).strip(),
+        str(event.get_message()).strip(),
     )[0]
     # 如果没有设置xhs的ck就结束，因为获取不到
     xhs_ck = getattr(GLOBAL_CONFIG, "xhs_ck", "")
@@ -619,7 +612,7 @@ async def xiaohongshu(bot: Bot, event: Event):
         # video_url = f"http://sns-video-bd.xhscdn.com/{note_data['video']['consumer']['originVideoKey']}"
         path = await download_video(video_url)
         # await xhs.send(Message(MessageSegment.video(path)))
-        await auto_video_send(event, path, IS_LAGRANGE)
+        await auto_video_send(event, path)
         return
     # 发送图片
     links = make_node_segment(
@@ -636,7 +629,7 @@ async def xiaohongshu(bot: Bot, event: Event):
 async def youtube(bot: Bot, event: Event):
     msg_url = re.search(
         r"(?:https?:\/\/)?(www\.)?youtube\.com\/[A-Za-z\d._?%&+\-=\/#]*|(?:https?:\/\/)?youtu\.be\/[A-Za-z\d._?%&+\-=\/#]*",
-        str(event.message).strip(),
+        str(event.get_message()).strip(),
     )[0]
 
     # 海外服务器判断
@@ -650,7 +643,7 @@ async def youtube(bot: Bot, event: Event):
         msg_url, IS_OVERSEA, os.getcwd(), proxy
     )
 
-    await auto_video_send(event, target_ytb_video_path, IS_LAGRANGE)
+    await auto_video_send(event, target_ytb_video_path)
 
 
 @ncm.handle()
@@ -698,7 +691,7 @@ async def netease(event: Event):
 
 @kg.handle()
 async def kugou(bot: Bot, event: Event):
-    message = str(event.message)
+    message = str(event.get_message())
     # logger.info(message)
     reg1 = r"https?://.*?kugou\.com.*?(?=\s|$|\n)"
     reg2 = r'jumpUrl":\s*"(https?:\\/\\/[^"]+)"'
@@ -770,7 +763,7 @@ async def kugou(bot: Bot, event: Event):
 
 @weibo.handle()
 async def wb(bot: Bot, event: Event):
-    message = str(event.message)
+    message = str(event.get_message())
     weibo_id = None
     reg = r'(jumpUrl|qqdocurl)": ?"(.*?)"'
 
@@ -876,7 +869,7 @@ async def wb(bot: Bot, event: Event):
                     "referer": "https://weibo.com/",
                 },
             )
-            await auto_video_send(event, path, IS_LAGRANGE)
+            await auto_video_send(event, path)
 
 
 def auto_determine_send_type(user_id: int, task: str):
@@ -901,7 +894,7 @@ def auto_determine_send_type(user_id: int, task: str):
 
 
 def make_node_segment(
-    user_id, segments: Union[MessageSegment, List]
+    user_id, segments: Union[MessageSegment, list]
 ) -> Union[MessageSegment, Iterable[MessageSegment]]:
     """
         将消息封装成 Segment 的 Node 类型，可以传入单个也可以传入多个，返回一个封装好的转发类型
@@ -922,7 +915,7 @@ def make_node_segment(
 
 
 async def send_forward_both(
-    bot: Bot, event: Event, segments: Union[MessageSegment, List]
+    bot: Bot, event: Event, segments: Union[MessageSegment, list]
 ) -> None:
     """
         自动判断message是 List 还是单个，然后发送{转发}，允许发送群和个人
@@ -935,20 +928,6 @@ async def send_forward_both(
         await bot.send_group_forward_msg(group_id=event.group_id, messages=segments)
     else:
         await bot.send_private_forward_msg(user_id=event.user_id, messages=segments)
-
-
-async def send_both(bot: Bot, event: Event, segments: MessageSegment) -> None:
-    """
-        自动判断message是 List 还是单个，发送{单个消息}，允许发送群和个人
-    :param bot:
-    :param event:
-    :param segments:
-    :return:
-    """
-    if isinstance(event, GroupMessageEvent):
-        await bot.send_group_msg(group_id=event.group_id, message=Message(segments))
-    elif isinstance(event, PrivateMessageEvent):
-        await bot.send_private_msg(user_id=event.user_id, message=Message(segments))
 
 
 async def upload_both(bot: Bot, event: Event, file_path: str, name: str) -> None:
@@ -968,19 +947,11 @@ async def upload_both(bot: Bot, event: Event, file_path: str, name: str) -> None
         await bot.upload_private_file(user_id=event.user_id, file=file_path, name=name)
 
 
-def get_id_both(event: Event):
-    if isinstance(event, GroupMessageEvent):
-        return event.group_id
-    elif isinstance(event, PrivateMessageEvent):
-        return event.user_id
-
-
-async def auto_video_send(event: Event, data_path: str, is_lagrange: bool = False):
+async def auto_video_send(event: Event, data_path: str):
     """
     拉格朗日自动转换成CQ码发送
     :param event:
     :param data_path:
-    :param is_lagrange:
     :return:
     """
     try:
@@ -990,48 +961,20 @@ async def auto_video_send(event: Event, data_path: str, is_lagrange: bool = Fals
         if data_path is not None and data_path.startswith("http"):
             data_path = await download_video(data_path)
 
-        # 如果是Lagrange，转换成CQ码发送
-
-        if is_lagrange:
-            # 检测文件大小
-            file_size_in_mb = get_file_size_mb(data_path)
-            # 如果视频大于 100 MB 自动转换为群文件
-            logger.info(f"当前视频文件为{file_size_in_mb}MB")
-            if file_size_in_mb > VIDEO_MAX_MB:
-                await bot.send(
-                    event,
-                    Message(
-                        f"当前解析文件 {file_size_in_mb} MB 大于 {VIDEO_MAX_MB} MB，尝试改用文件方式发送，请稍等..."
-                    ),
-                )
-                timestamp = str(int(time.time()))
-                # 构建新的文件名
-                new_file_name = timestamp + ".mp4"
-                await upload_both(bot, event, data_path, new_file_name)
-            else:
-                cq_code = f"[CQ:video,file={data_path}]"
-                await bot.send(event, Message(cq_code))
-                return
-        else:
-            # 检测文件大小
-            file_size_in_mb = get_file_size_mb(data_path)
-            # 如果视频大于 100 MB 自动转换为群文件
-            if file_size_in_mb > VIDEO_MAX_MB:
-                await bot.send(
-                    event,
-                    Message(
-                        f"当前解析文件 {file_size_in_mb} MB 大于 {VIDEO_MAX_MB} MB，尝试改用文件方式发送，请稍等..."
-                    ),
-                )
-                await upload_both(bot, event, data_path, data_path.split("/")[-1])
-                return
-            # 根据事件类型发送不同的消息
-            await send_both(bot, event, MessageSegment.video(f"file://{data_path}"))
+        file_size_in_mb = get_file_size_mb(data_path)
+        if file_size_in_mb > VIDEO_MAX_MB:
+            await bot.send(
+                event,
+                Message(
+                    f"当前解析文件 {file_size_in_mb} MB 大于 {VIDEO_MAX_MB} MB，尝试改用文件方式发送，请稍等..."
+                ),
+            )
+            await upload_both(bot, event, data_path, data_path.split("/")[-1])
+            return
+        await bot.send(event, MessageSegment.video(f"file://{data_path}"))
     except Exception as e:
         logger.error(f"解析发送出现错误，具体为\n{e}")
     finally:
-        # 删除临时文件
-        if os.path.exists(data_path):
-            os.unlink(data_path)
-        if os.path.exists(data_path + ".jpg"):
-            os.unlink(data_path + ".jpg")
+        for p in [pathlib.Path(data_path), pathlib.Path(data_path + ".jpg")]:
+            if p.exists():
+                p.unlink()
