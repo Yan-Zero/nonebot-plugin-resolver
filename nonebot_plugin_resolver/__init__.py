@@ -1,12 +1,12 @@
+import os
 import re
 import json
-import os.path
 import pathlib
 import asyncio
 import httpx
 import aiohttp
 
-from typing import cast, Iterable, Union
+from typing import Iterable
 from urllib.parse import urlparse, parse_qs
 
 from bilibili_api import video, Credential, live, article
@@ -21,12 +21,9 @@ from nonebot.adapters.onebot.v11 import (
     MessageSegment,
 )
 from nonebot.adapters.onebot.v11.event import GroupMessageEvent, PrivateMessageEvent
-from nonebot.matcher import current_bot
 from nonebot.plugin import PluginMetadata
 
-
 from .config import Config
-
 from .constants import (
     COMMON_HEADER,
     URL_TYPE_CODE_DICT,
@@ -299,7 +296,7 @@ async def bilibili(bot: Bot, event: Event) -> None:
         logger.info(remove_res)
     # 发送出去
     # await bili23.send(Message(MessageSegment.video(f"{path}-res.mp4")))
-    await auto_video_send(event, f"{path}-res.mp4")
+    await auto_video_send(bot, event, f"{path}-res.mp4")
     # 这里是总结内容，如果写了cookie就可以
     if BILI_SESSDATA != "":
         ai_conclusion = await v.get_ai_conclusion(await v.get_cid(0))
@@ -368,7 +365,7 @@ async def dy(bot: Bot, event: Event) -> None:
                 player_real_addr = DY_TOUTIAO_INFO.replace("{}", player_uri)
                 # 发送视频
                 # await douyin.send(Message(MessageSegment.video(player_addr)))
-                await auto_video_send(event, player_real_addr)
+                await auto_video_send(bot, event, player_real_addr)
             elif url_type == "image":
                 # 无水印图片列表/No watermark image list
                 no_watermark_image_list = []
@@ -382,8 +379,6 @@ async def dy(bot: Bot, event: Event) -> None:
                     )
                     # 有水印图片列表
                     # watermark_image_list.append(i['download_url_list'][0])
-                # 异步发送
-                # logger.info(no_watermark_image_list)
                 # imgList = await asyncio.gather([])
                 await send_forward_both(
                     bot, event, make_node_segment(bot.self_id, no_watermark_image_list)
@@ -391,7 +386,7 @@ async def dy(bot: Bot, event: Event) -> None:
 
 
 @tik.handle()
-async def tiktok(event: Event) -> None:
+async def tiktok(bot: Bot, event: Event) -> None:
     """
         tiktok解析
     :param event:
@@ -431,11 +426,11 @@ async def tiktok(event: Event) -> None:
         url, IS_OVERSEA, os.getcwd(), RESOLVER_PROXY, "tiktok"
     )
 
-    await auto_video_send(event, target_tik_video_path)
+    await auto_video_send(bot, event, target_tik_video_path)
 
 
 @acfun.handle()
-async def ac(event: Event) -> None:
+async def ac(bot: Bot, event: Event) -> None:
     """
         acfun解析
     :param event:
@@ -459,7 +454,7 @@ async def ac(event: Event) -> None:
     )
     merge_ac_file_to_mp4(ts_names, output_file_name)
     # await acfun.send(Message(MessageSegment.video(f"{os.getcwd()}/{output_file_name}")))
-    await auto_video_send(event, f"{os.getcwd()}/{output_file_name}")
+    await auto_video_send(bot, event, f"{os.getcwd()}/{output_file_name}")
 
 
 @twit.handle()
@@ -477,7 +472,6 @@ async def twitter(bot: Bot, event: Event):
 
     x_url = GENERAL_REQ_LINK.replace("{}", x_url)
 
-    # 内联一个请求
     def x_req(url):
         return httpx.get(
             url,
@@ -506,17 +500,26 @@ async def twitter(bot: Bot, event: Event):
 
     await twit.send(Message(f"{GLOBAL_NICKNAME}识别：小蓝鸟学习版"))
 
-    # 图片
     if x_url_res.endswith(".jpg") or x_url_res.endswith(".png"):
         res = await download_img(x_url_res, "", RESOLVER_PROXY)
     else:
-        # 视频
         res = await download_video(x_url_res)
 
-    # 发送异步后的数据
-    await send_forward_both(bot, event, auto_determine_send_type(int(bot.self_id), res))
+    def auto_determine_send_type(user_id: int, task: str):
+        if task.endswith("jpg") or task.endswith("png"):
+            return MessageSegment.node_custom(
+                user_id=user_id,
+                nickname=GLOBAL_NICKNAME,
+                content=Message(MessageSegment.image(task)),
+            )
+        elif task.endswith("mp4"):
+            return MessageSegment.node_custom(
+                user_id=user_id,
+                nickname=GLOBAL_NICKNAME,
+                content=Message(MessageSegment.video(task)),
+            )
 
-    # 清除垃圾
+    await send_forward_both(bot, event, auto_determine_send_type(int(bot.self_id), res))
     os.unlink(res)
 
 
@@ -612,7 +615,7 @@ async def xiaohongshu(bot: Bot, event: Event):
         # video_url = f"http://sns-video-bd.xhscdn.com/{note_data['video']['consumer']['originVideoKey']}"
         path = await download_video(video_url)
         # await xhs.send(Message(MessageSegment.video(path)))
-        await auto_video_send(event, path)
+        await auto_video_send(bot, event, path)
         return
     # 发送图片
     links = make_node_segment(
@@ -643,7 +646,7 @@ async def youtube(bot: Bot, event: Event):
         msg_url, IS_OVERSEA, os.getcwd(), proxy
     )
 
-    await auto_video_send(event, target_ytb_video_path)
+    await auto_video_send(bot, event, target_ytb_video_path)
 
 
 @ncm.handle()
@@ -869,33 +872,12 @@ async def wb(bot: Bot, event: Event):
                     "referer": "https://weibo.com/",
                 },
             )
-            await auto_video_send(event, path)
-
-
-def auto_determine_send_type(user_id: int, task: str):
-    """
-        判断是视频还是图片然后发送最后删除，函数在 twitter 这类可以图、视频混合发送的媒体十分有用
-    :param user_id:
-    :param task:
-    :return:
-    """
-    if task.endswith("jpg") or task.endswith("png"):
-        return MessageSegment.node_custom(
-            user_id=user_id,
-            nickname=GLOBAL_NICKNAME,
-            content=Message(MessageSegment.image(task)),
-        )
-    elif task.endswith("mp4"):
-        return MessageSegment.node_custom(
-            user_id=user_id,
-            nickname=GLOBAL_NICKNAME,
-            content=Message(MessageSegment.video(task)),
-        )
+            await auto_video_send(bot, event, path)
 
 
 def make_node_segment(
-    user_id, segments: Union[MessageSegment, list]
-) -> Union[MessageSegment, Iterable[MessageSegment]]:
+    user_id, segments: MessageSegment | list
+) -> MessageSegment | Iterable[MessageSegment]:
     """
         将消息封装成 Segment 的 Node 类型，可以传入单个也可以传入多个，返回一个封装好的转发类型
     :param user_id: 可以通过event获取
@@ -915,7 +897,7 @@ def make_node_segment(
 
 
 async def send_forward_both(
-    bot: Bot, event: Event, segments: Union[MessageSegment, list]
+    bot: Bot, event: Event, segments: MessageSegment | list
 ) -> None:
     """
         自动判断message是 List 还是单个，然后发送{转发}，允许发送群和个人
@@ -947,7 +929,7 @@ async def upload_both(bot: Bot, event: Event, file_path: str, name: str) -> None
         await bot.upload_private_file(user_id=event.user_id, file=file_path, name=name)
 
 
-async def auto_video_send(event: Event, data_path: str):
+async def auto_video_send(bot: Bot, event: Event, data_path: str):
     """
     拉格朗日自动转换成CQ码发送
     :param event:
@@ -955,12 +937,8 @@ async def auto_video_send(event: Event, data_path: str):
     :return:
     """
     try:
-        bot: Bot = cast(Bot, current_bot.get())
-
-        # 如果data以"http"开头，先下载视频
         if data_path is not None and data_path.startswith("http"):
             data_path = await download_video(data_path)
-
         file_size_in_mb = get_file_size_mb(data_path)
         if file_size_in_mb > VIDEO_MAX_MB:
             await bot.send(
@@ -969,8 +947,7 @@ async def auto_video_send(event: Event, data_path: str):
                     f"当前解析文件 {file_size_in_mb} MB 大于 {VIDEO_MAX_MB} MB，尝试改用文件方式发送，请稍等..."
                 ),
             )
-            await upload_both(bot, event, data_path, data_path.split("/")[-1])
-            return
+            return await upload_both(bot, event, data_path, data_path.split("/")[-1])
         await bot.send(event, MessageSegment.video(f"file://{data_path}"))
     except Exception as e:
         logger.error(f"解析发送出现错误，具体为\n{e}")
