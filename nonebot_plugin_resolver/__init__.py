@@ -9,9 +9,9 @@ import aiohttp
 from typing import Iterable
 from urllib.parse import urlparse, parse_qs
 
+import bilibili_api as bapi
 from bilibili_api import video, Credential, live, article
 from bilibili_api.favorite_list import get_video_favorite_list_content
-from bilibili_api.opus import Opus
 from bilibili_api.video import VideoDownloadURLDataDetecter
 from nonebot import on_regex, logger, get_plugin_config
 from nonebot.adapters.onebot.v11 import (
@@ -22,6 +22,8 @@ from nonebot.adapters.onebot.v11 import (
 )
 from nonebot.adapters.onebot.v11.event import GroupMessageEvent, PrivateMessageEvent
 from nonebot.plugin import PluginMetadata
+
+from .core.image import download_img, markdown_to_image
 
 from .config import Config
 from .core.constants import (
@@ -39,7 +41,6 @@ from .core.constants import (
     KUGOU_TEMP_API,
 )
 from .core import (
-    download_img,
     download_file,
     remove_files,
     download_video,
@@ -47,7 +48,7 @@ from .core import (
     get_file_size_mb,
 )
 from .core.acfun import (
-    parse_url,
+    parse_ac_url,
     download_m3u8_videos,
     parse_m3u8,
     merge_ac_file_to_mp4,
@@ -67,22 +68,19 @@ __plugin_meta__ = PluginMetadata(
     supported_adapters={"~onebot.v11", "~qq"},
 )
 
-# 配置加载
 GLOBAL_CONFIG = get_plugin_config(Config)
-# 全局名称
 GLOBAL_NICKNAME: str = str(getattr(GLOBAL_CONFIG, "r_global_nickname", ""))
-# 🪜地址
 RESOLVER_PROXY: str = getattr(GLOBAL_CONFIG, "resolver_proxy", "http://127.0.0.1:7890")
-# 是否是海外服务器
 IS_OVERSEA: bool = bool(getattr(GLOBAL_CONFIG, "is_oversea", False))
-# 哔哩哔哩限制的最大视频时长（默认8分钟），单位：秒
-VIDEO_DURATION_MAXIMUM: int = int(getattr(GLOBAL_CONFIG, "video_duration_maximum", 480))
-# 哔哩哔哩的 SESSDATA
-BILI_SESSDATA: str = str(getattr(GLOBAL_CONFIG, "bili_sessdata", ""))
-# 构建哔哩哔哩的Credential
-credential = Credential(sessdata=BILI_SESSDATA)
+BILI_CREDEHTIAL = (
+    Credential(sessdata=GLOBAL_CONFIG.bili_sessdata)
+    if GLOBAL_CONFIG.bili_sessdata
+    else None
+)
 
-bili23 = on_regex(r"(.*)(bilibili.com|b23.tv|BV[0-9a-zA-Z]{10})", priority=1)
+bili23 = on_regex(
+    r"(.*)(bilibili.com|b23.tv|BV[0-9a-zA-Z]{10}|(aA)(vV)\d+)", priority=1
+)
 douyin = on_regex(r"(.*)(v.douyin.com)", priority=1)
 tik = on_regex(r"(.*)(www.tiktok.com)|(vt.tiktok.com)|(vm.tiktok.com)", priority=1)
 acfun = on_regex(r"(.*)(acfun.cn)")
@@ -96,101 +94,82 @@ kg = on_regex(r"(.*)(kugou.com)")
 
 @bili23.handle()
 async def bilibili(bot: Bot, event: Event) -> None:
-    """
-        哔哩哔哩解析
+    """哔哩哔哩解析
     :param bot:
     :param event:
     :return:
     """
-    # 消息
     url: str = str(event.get_message()).strip()
-    # 正则匹配
+
     url_reg = (
         r"(http:|https:)\/\/(space|www|live).bilibili.com\/[A-Za-z\d._?%&+\-=\/#]*"
     )
     b_short_rex = r"(http:|https:)\/\/b23.tv\/[A-Za-z\d._?%&+\-=\/#]*"
+
     # BV处理
-    if re.match(r"^BV[1-9a-zA-Z]{10}$", url):
+    if re.match(r"(^BV[1-9a-zA-Z]{10}$)|(^(aA)(vV)\d+$)", url):
         url = "https://www.bilibili.com/video/" + url
-    # 处理短号、小程序问题
+
     if "b23.tv" in url or ("b23.tv" and "QQ小程序" in url):
         b_short_url = re.search(b_short_rex, url.replace("\\", ""))[0]
         resp = httpx.get(b_short_url, headers=BILIBILI_HEADER, follow_redirects=True)
         url: str = str(resp.url)
     else:
         url: str = re.search(url_reg, url).group(0)
-    # ===============发现解析的是动态，转移一下===============
-    if ("t.bilibili.com" in url or "/opus" in url) and BILI_SESSDATA != "":
-        # 去除多余的参数
+
+    if ("t.bilibili.com" in url or "/opus" in url) and BILI_CREDEHTIAL:
         if "?" in url:
             url = url[: url.index("?")]
-        dynamic_id = int(re.search(r"[^/]+(?!.*/)", url)[0])
-        dynamic_info = await Opus(dynamic_id, credential).get_info()
-        # 这里比较复杂，暂时不用管，使用下面这个算法即可实现哔哩哔哩动态转发
-        if dynamic_info is not None:
-            title = dynamic_info["item"]["basic"]["title"]
-            paragraphs = []
-            for module in dynamic_info["item"]["modules"]:
-                if "module_content" in module:
-                    paragraphs = module["module_content"]["paragraphs"]
-                    break
-            desc = paragraphs[0]["text"]["nodes"][0]["word"]["words"]
-            pics = paragraphs[1]["pic"]["pics"]
-            await bili23.send(
-                Message(f"{GLOBAL_NICKNAME}识别：B站动态，{title}\n{desc}")
-            )
-            send_pics = []
-            for pic in pics:
-                img = pic["url"]
-                send_pics.append(
-                    make_node_segment(bot.self_id, MessageSegment.image(img))
-                )
-            # 发送异步后的数据
-            await send_forward_both(bot, event, send_pics)
-        return
-    # 直播间识别
-    if "live" in url:
-        # https://live.bilibili.com/30528999?hotRank=0
-        room_id = re.search(r"\/(\d+)$", url).group(1)
-        room = live.LiveRoom(room_display_id=int(room_id))
-        room_info = (await room.get_room_info())["room_info"]
-        title, cover, keyframe = (
-            room_info["title"],
-            room_info["cover"],
-            room_info["keyframe"],
+        dynamic = bapi.opus.Opus(
+            int(re.search(r"[^/]+(?!.*/)", url)[0]), BILI_CREDEHTIAL
         )
-        await bili23.send(
+
+        print(dynamic.get_info())
+        await bili23.finish(
             Message(
                 [
-                    MessageSegment.image(cover),
-                    MessageSegment.image(keyframe),
+                    f"{GLOBAL_NICKNAME}识别：哔哩哔哩动态",
+                ]
+            )
+        )
+
+    # 直播间
+    if "live" in url:
+        room = live.LiveRoom(
+            room_display_id=int(re.search(r"\/(\d+)$", url).group(1)),
+            credential=BILI_CREDEHTIAL,
+        )
+        room_info = (await room.get_room_info())["room_info"]
+        await bili23.finish(
+            Message(
+                [
+                    MessageSegment.image(room_info["cover"]),
+                    MessageSegment.image(room_info["keyframe"]),
                     MessageSegment.text(
-                        f"{GLOBAL_NICKNAME}识别：哔哩哔哩直播，{title}"
+                        f"{GLOBAL_NICKNAME}识别：哔哩哔哩直播，{room_info['title']}"
                     ),
                 ]
             )
         )
-        return
+
     # 专栏识别
     if "read" in url:
-        read_id = re.search(r"read\/cv(\d+)", url).group(1)
-        ar = article.Article(read_id)
-        # 如果专栏为公开笔记，则转换为笔记类
-        # NOTE: 笔记类的函数与专栏类的函数基本一致
+        ar = article.Article(re.search(r"read\/cv(\d+)", url).group(1))
         if ar.is_note():
             ar = ar.turn_to_note()
-        # 加载内容
+
         await ar.fetch_content()
-        markdown_path = f"{os.getcwd()}/article.md"
-        with open(markdown_path, "w", encoding="utf8") as f:
-            f.write(ar.markdown())
-        await bili23.send(Message(f"{GLOBAL_NICKNAME}识别：哔哩哔哩专栏"))
-        await bili23.send(
-            Message(MessageSegment(type="file", data={"file": markdown_path}))
+        await bili23.finish(
+            Message(
+                [
+                    f"{GLOBAL_NICKNAME}识别：哔哩哔哩专栏",
+                    MessageSegment.image(await markdown_to_image(ar.markdown())),
+                ]
+            )
         )
-        return
+
     # 收藏夹识别
-    if "favlist" in url and BILI_SESSDATA != "":
+    if "favlist" in url and BILI_CREDEHTIAL:
         # https://space.bilibili.com/22990202/favlist?fid=2344812202
         fav_id = re.search(r"favlist\?fid=(\d+)", url).group(1)
         fav_list = (await get_video_favorite_list_content(fav_id))["medias"][:10]
@@ -216,40 +195,47 @@ async def bilibili(bot: Bot, event: Event) -> None:
         )
         await bili23.send(make_node_segment(bot.self_id, favs))
         return
-    # 获取视频信息
+
     video_id = re.search(r"video\/[^\?\/ ]+", url)[0].split("/")[1]
-    v = video.Video(video_id, credential=credential)
+    if video_id[:2].lower() == "bv":
+        v = video.Video(video_id, credential=BILI_CREDEHTIAL)
+    else:
+        v = video.Video(aid=int(video_id[2:]), credential=BILI_CREDEHTIAL)
+
     video_info = await v.get_info()
-    if video_info is None:
-        await bili23.send(Message(f"{GLOBAL_NICKNAME}识别：B站，出错，无法获取数据！"))
-        return
+    if not video_info:
+        return await bili23.send(f"{GLOBAL_NICKNAME}识别：B站，出错，无法获取数据！")
+
     video_title, video_cover, video_desc, video_duration = (
         video_info["title"],
         video_info["pic"],
         video_info["desc"],
         video_info["duration"],
     )
-    # 校准 分p 的情况
+
     page_num = 0
     if "pages" in video_info:
-        # 解析URL
         parsed_url = urlparse(url)
-        # 检查是否有查询字符串
-        if parsed_url.query:
-            # 解析查询字符串中的参数
-            query_params = parse_qs(parsed_url.query)
-            # 获取指定参数的值，如果参数不存在，则返回None
-            page_num = int(query_params.get("p", [1])[0]) - 1
-        else:
-            page_num = 0
-        if "duration" in video_info["pages"][page_num]:
-            video_duration = video_info["pages"][page_num].get(
-                "duration", video_info.get("duration")
+        page_num = (
+            (int(parse_qs(parsed_url.query).get("p", [1])[0]) - 1)
+            if parsed_url.query
+            else 0
+        )
+        video_duration = (
+            video_info["pages"][page_num].get("duration", video_info.get("duration"))
+            if "duration" in video_info["pages"][page_num]
+            else video_info.get("duration", 0)
+        )
+
+    summary = ""
+    if BILI_CREDEHTIAL:
+        ai_conclusion = await v.get_ai_conclusion(await v.get_cid(0))
+        if ai_conclusion["model_result"]["summary"] != "":
+            summary = make_node_segment(
+                bot.self_id,
+                ["bilibili ", ai_conclusion["model_result"]["summary"]],
             )
-        else:
-            # 如果索引超出范围，使用 video_info['duration'] 或者其他默认值
-            video_duration = video_info.get("duration", 0)
-    # 截断下载时间比较长的视频
+
     online = await v.get_online()
     online_str = (
         f'🏄‍♂️ 总共 {online["total"]} 人在观看，{online["count"]} 人在网页端观看'
@@ -259,26 +245,29 @@ async def bilibili(bot: Bot, event: Event) -> None:
             else ""
         )
     )
-    if video_duration > VIDEO_DURATION_MAXIMUM or not GLOBAL_CONFIG.download_video:
-        return await bili23.finish(
-            Message(MessageSegment.image(video_cover))
-            + Message(
-                f"\n{GLOBAL_NICKNAME}识别：B站，{video_title}\n{extra_bili_info(video_info)}\n📝 简介：{video_desc}\n{online_str}"
-            )
-        )
+
     await bili23.send(
-        Message(MessageSegment.image(video_cover))
-        + Message(
-            f"\n{GLOBAL_NICKNAME}识别：B站，{video_title}\n{extra_bili_info(video_info)}\n📝 简介：{video_desc}\n{online_str}"
+        Message(
+            [
+                MessageSegment.image(video_cover),
+                MessageSegment.text(
+                    f"\n{GLOBAL_NICKNAME}识别：B站，{video_title}\n{extra_bili_info(video_info)}\n📝 简介：{video_desc}\n{online_str}"
+                    + (("\n🤖 AI总结：" + summary) if summary else "")
+                ),
+            ]
         )
     )
-    # 获取下载链接
+    if (
+        video_duration > GLOBAL_CONFIG.video_duration_maximum
+        or not GLOBAL_CONFIG.download_video
+    ):
+        return
+
     logger.info(page_num)
     download_url_data = await v.get_download_url(page_index=page_num)
     detecter = VideoDownloadURLDataDetecter(download_url_data)
     streams = detecter.detect_best_streams()
     video_url, audio_url = streams[0].url, streams[1].url
-    # 下载视频和音频
     path = os.getcwd() + "/" + video_id
     try:
         await asyncio.gather(
@@ -291,24 +280,12 @@ async def bilibili(bot: Bot, event: Event) -> None:
     finally:
         remove_res = remove_files([f"{video_id}-video.m4s", f"{video_id}-audio.m4s"])
         logger.info(remove_res)
-    # 发送出去
-    # await bili23.send(Message(MessageSegment.video(f"{path}-res.mp4")))
     await auto_video_send(bot, event, f"{path}-res.mp4")
-    # 这里是总结内容，如果写了cookie就可以
-    if BILI_SESSDATA != "":
-        ai_conclusion = await v.get_ai_conclusion(await v.get_cid(0))
-        if ai_conclusion["model_result"]["summary"] != "":
-            send_forword_summary = make_node_segment(
-                bot.self_id,
-                ["bilibili AI总结", ai_conclusion["model_result"]["summary"]],
-            )
-            await bili23.send(Message(send_forword_summary))
 
 
 @douyin.handle()
 async def dy(bot: Bot, event: Event) -> None:
-    """
-        抖音解析
+    """抖音解析
     :param bot:
     :param event:
     :return:
@@ -384,8 +361,7 @@ async def dy(bot: Bot, event: Event) -> None:
 
 @tik.handle()
 async def tiktok(bot: Bot, event: Event) -> None:
-    """
-        tiktok解析
+    """tiktok解析
     :param event:
     :return:
     """
@@ -426,28 +402,25 @@ async def tiktok(bot: Bot, event: Event) -> None:
 
 @acfun.handle()
 async def ac(bot: Bot, event: Event) -> None:
-    """
-        acfun解析
+    """acfun解析
     :param event:
     :return:
     """
-    # 消息
-    inputMsg: str = str(event.get_message()).strip()
+    message: str = str(event.get_message()).strip()
+    if "m.acfun.cn" in message:
+        message = f"https://www.acfun.cn/v/ac{re.search(r'ac=([^&?]*)', message)[1]}"
 
-    # 短号处理
-    if "m.acfun.cn" in inputMsg:
-        inputMsg = f"https://www.acfun.cn/v/ac{re.search(r'ac=([^&?]*)', inputMsg)[1]}"
-
-    url_m3u8s, video_name = parse_url(inputMsg)
+    url_m3u8s, video_name, video_info = parse_ac_url(message)
     await acfun.send(Message(f"{GLOBAL_NICKNAME}识别：猴山，{video_name}"))
-    m3u8_full_urls, ts_names, output_folder_name, output_file_name = parse_m3u8(
-        url_m3u8s
-    )
-    await asyncio.gather(
-        *[download_m3u8_videos(url, i) for i, url in enumerate(m3u8_full_urls)]
-    )
-    merge_ac_file_to_mp4(ts_names, output_file_name)
-    await auto_video_send(bot, event, f"{os.getcwd()}/{output_file_name}")
+    logger.opt(colors=True).info(video_info)
+
+    if GLOBAL_CONFIG.download_video:
+        m3u8_full_urls, ts_names, _, output_file_name = parse_m3u8(url_m3u8s)
+        await asyncio.gather(
+            *[download_m3u8_videos(url, i) for i, url in enumerate(m3u8_full_urls)]
+        )
+        merge_ac_file_to_mp4(ts_names, output_file_name)
+        await auto_video_send(bot, event, f"{os.getcwd()}/{output_file_name}")
 
 
 @twit.handle()
